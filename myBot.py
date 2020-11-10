@@ -4,14 +4,17 @@ from penguin_game import *
 My name is TGbot. I'm still a little dumb, but I'm working on it
 """
 
+
 # All groups to specific destination
 def groups_to_dest(grouplist, dest):
     return [ gp for gp in grouplist if gp.destination == dest]
 
 
+
 # Check if I have more iceberg than the enemy
 def have_more_icebergs(game):
     return True if len(game.get_my_icebergs()) > len(game.get_enemy_icebergs()) else False
+
 
 
 # Send Penguins 
@@ -20,21 +23,43 @@ def send_group(source, destination, group):
     source.send_penguins(destination, group)
 
 
+
 #Upgrade iceberg
 def upgrade(iceberg, penguins):
     if penguins >= iceberg.upgrade_cost and iceberg.upgrade_level_limit > iceberg.level:
         iceberg.upgrade()
         return True
     return False
-    
-    
-# Return the closest destination to specific iceberg
-def closet_destination(game, iceberg):
-    return sorted(game.get_all_icebergs(), key = lambda x: iceberg.get_turns_till_arrival(x))[1]
-            
+ 
+
+
+# Return all the icebergs except a specific one
+def other_icebergs(game, iceberg):
+    return [x for x in game.get_all_icebergs() if x != iceberg]
+
+
+
+# return list of destinations sorted by their distance from a specific iceberg
+def closest_strategy(game, iceberg, destinations):
+    return sorted(destinations, key = lambda x: iceberg.get_turns_till_arrival(x))[0]
+
+
+
+# return list of destinations sorted by their level of centrality
+def central_strategy(game, destinations):  
+    most_central_dest = {}  # dict {iceberg: sum_distances}
+    for dest in destinations:
+        sum_distance = 0
+        for oth_dest in destinations:
+            sum_distance += dest.get_turns_till_arrival(oth_dest)
+        most_central_dest[dest] = sum_distance
+    return list(most_central_dest.keys())
+
+
 
 # claculate futur state of an iceberg in x turns
 def iceberg_state_in_X_turns(game, iceberg, turns):
+    print("iceberg " + str(iceberg.id) + ": ")
     enemy_groups = [gp for gp in groups_to_dest(game.get_my_penguin_groups(), iceberg) if
                     gp.turns_till_arrival <= turns]
     my_groups = [gp for gp in groups_to_dest(game.get_enemy_penguin_groups(), iceberg) if
@@ -44,29 +69,39 @@ def iceberg_state_in_X_turns(game, iceberg, turns):
     print("all groups to this iceberg")
     print(all_groups)
     
-    owner = iceberg.owner
+    # The owner and penguins amount on the iceberg in this turn
+    owner = iceberg.owner 
     penguins = iceberg.penguin_amount
     print("penguins now on this iceberg " + str(penguins))
+    
+    # Calculate the iceberg changes in turns until arrival time
     for gp in all_groups:
         if owner != game.get_neutral():
             penguins += (gp.turns_till_arrival * iceberg.level)
+        
+        # Add the number of penguins if they belong to the same group
+        # Subtract if they are from the opposite group
         if gp.owner == owner:
             penguins += gp.penguin_amount
         else:
             penguins -= gp.penguin_amount
+            
+            # Change owner
             if penguins < 0:
                 owner = gp.owner
                 penguins *= -1
             elif penguins == 0:
                 owner = game.get_neutral()
+    
+    # Adds the natural multiplicity of penguins, if they are not neutral penguins
     if owner != game.get_neutral():
         if all_groups:
             turns -= all_groups[len(all_groups) - 1].turns_till_arrival
         penguins += (turns * iceberg.level)
     
-    print("iceberg " + str(iceberg.id) + " state")
     print([owner, penguins])
     return {"owner":owner, "penguins":penguins}
+
 
 
 # The best icebergs according to the distance and the amount I sent (sent/did not send)
@@ -84,7 +119,8 @@ def best_iceberg(game, icebergs, my_iceberg, available):
         future_state = iceberg_state_in_X_turns(game, iceberg, my_iceberg.get_turns_till_arrival(iceberg))
         
         # If I do not own the iceberg but can conquer it, add it to the destinations list and reduce the number of penguins available
-        if future_state["owner"] != game.get_myself() and available > future_state["penguins"]:
+        if  future_state["owner"] == game.get_myself(): continue
+        elif available > future_state["penguins"]:
             destinations.append([iceberg, future_state["penguins"] + 1])  # [destintion & amount of peguins to send]
             available -= (future_state["penguins"] + 1)
         else:
@@ -94,6 +130,7 @@ def best_iceberg(game, icebergs, my_iceberg, available):
     return destinations
 
 
+
 # The main function
 def do_turn(game):
 
@@ -101,13 +138,12 @@ def do_turn(game):
     :param game: the current game state
     :type game: Game
     """
-    
     print("turn num: " + str(game.turn))
 
     initial_iceberg = game.get_my_icebergs()[0]
     
     # Wait for the other to attack or for the game to come to an end before attacking
-    if not game.get_enemy_penguin_groups() and game.turn + closet_destination(game, initial_iceberg).get_turns_till_arrival(initial_iceberg)<game.max_turns:
+    if not game.get_enemy_penguin_groups() and initial_iceberg.level < initial_iceberg.upgrade_level_limit: #game.turn + closet_destination(game, initial_iceberg).get_turns_till_arrival(initial_iceberg)<game.max_turns:
         upgrade(initial_iceberg, initial_iceberg.penguin_amount)
         return
    
