@@ -26,7 +26,7 @@ def send_group(source, destination, group):
 
 #Upgrade iceberg
 def upgrade(iceberg, penguins):
-    if penguins >= iceberg.upgrade_cost and iceberg.upgrade_level_limit > iceberg.level:
+    if (penguins >= iceberg.upgrade_cost) and (iceberg.upgrade_level_limit > iceberg.level):
         iceberg.upgrade()
         return True
     return False
@@ -130,41 +130,70 @@ def best_iceberg(game, icebergs, my_iceberg, available):
     return destinations
 
 
+# Calculates the average number of turns of several icebergs from the destination
+def turns_avg(game, destination, sources):
+    sum_distance = sum([s.get_turns_till_arrival(destination) for s in sources])
+    return sum_distance // len(sources)
+
+
+
+def ambush(game, destination, sources):
+    sources_sending = {}
+    sources.sort(key = lambda x: x.penguin_amount, reverse = True)
+    future_state = iceberg_state_in_X_turns(game, destination, turns_avg(game, destination, sources))
+    if future_state["owner"] == game.get_myself(): return sources_sending
+    for source in sources:  
+        if source.penguin_amount > future_state["penguins"]:
+            sources_sending[source] = future_state["penguins"] + 1  # [source : amount of peguins to send]
+            return sources_sending
+        else:
+            sources_sending[source] = source.penguin_amount * 0.5
+            future_state["penguins"] -= source.penguin_amount * 0.5   
+    return sources_sending
+
+
 
 # The main function
 def do_turn(game):
 
-    """
-    :param game: the current game state
-    :type game: Game
-    """
     print("turn num: " + str(game.turn))
 
     initial_iceberg = game.get_my_icebergs()[0]
-    
     # Wait for the other to attack or for the game to come to an end before attacking
-    if not game.get_enemy_penguin_groups() and initial_iceberg.level < initial_iceberg.upgrade_level_limit: #game.turn + closet_destination(game, initial_iceberg).get_turns_till_arrival(initial_iceberg)<game.max_turns:
+    if not game.get_enemy_penguin_groups() and initial_iceberg.level < initial_iceberg.upgrade_level_limit:  
         upgrade(initial_iceberg, initial_iceberg.penguin_amount)
         return
-   
-    # Go through all the icebergs
-    for my_iceberg in game.get_my_icebergs():
-
-        percentage = 1
-        available = int(my_iceberg.penguin_amount * percentage) 
-        
-        # Check if there is a group that can conquer me or leave me with too few penguins
+    
+    # Check if there is a group that can conquer me or leave me with too few penguins
         # Allows conquest / upgrade only if not
-        if not [gp for gp in groups_to_dest(game.get_enemy_penguin_groups(), my_iceberg)
-                if iceberg_state_in_X_turns(game, my_iceberg, gp.turns_till_arrival+1)["owner"] == game.get_enemy
-                or iceberg_state_in_X_turns(game, my_iceberg, gp.turns_till_arrival+1)["penguins"]-gp.penguin_amount<my_iceberg.upgrade_cost ]:
-            
+    available_icebregs = [iceberg for iceberg in game.get_my_icebergs() if iceberg not in [gp.destination for gp in groups_to_dest(game.get_enemy_penguin_groups(), iceberg)
+        if iceberg_state_in_X_turns(game, iceberg, gp.turns_till_arrival+1)["owner"] == game.get_enemy 
+        or iceberg_state_in_X_turns(game, iceberg, gp.turns_till_arrival+1)["penguins"] - gp.penguin_amount < iceberg.upgrade_cost]]
+    
+    
+    enemy_groups = game.get_enemy_penguin_groups() 
+    if available_icebregs and enemy_groups:
+        # Go through all the enemy's groups  
+        for group in enemy_groups:
+            destination = group.destination
+            sources = ambush(game, destination, available_icebregs)   
+            for source, amount in sources.items():
+                send_group(source, destination, amount)
+    
+    else:
+        # Go through all the icebergs
+        for my_iceberg in available_icebregs:
+
+            percentage = 1
+            available = int(my_iceberg.penguin_amount * percentage) 
+                
             # Look for the best destination for an attack
             destinations = best_iceberg(game, game.get_neutral_icebergs() + game.get_enemy_icebergs(),
-                                        my_iceberg, available)
+                                            my_iceberg, available)
             for destination in destinations:
                 send_group(my_iceberg, destination[0], destination[1])
-            
-            # Try to upgrade if no good destination is found
+                
+                # Try to upgrade if no good destination is found
             if not destinations:
                 upgrade(my_iceberg, available)
+        
