@@ -28,9 +28,10 @@ my_future_ices = []  # type: List[Iceberg]
 future_enemy_icebergs = []  # type: List[Iceberg]
 future_neutral_icebergs = []
 calc_future_state = {}  # type: dict  # The amount on each iceberg after calculating all of the penguin groups
+need_protect = []
 neighbors_map = {}
 front = []
-toSend = defaultdict(list)
+circular = False
 
 
 def do_turn(game):
@@ -69,8 +70,9 @@ def pre_turn(game):
     global future_enemy_icebergs
     global my_future_ices
     global calc_future_state
+    global need_protect
     global neighbors_map
-    global toSend
+    global circular
     global front
 
     Game = game
@@ -85,15 +87,14 @@ def pre_turn(game):
     my_penguin_groups = game.get_my_penguin_groups()
     enemy_penguin_groups = game.get_enemy_penguin_groups()
     neighbors_map = find_neighbors()
-    toSend = defaultdict(list)
+    circular = is_circular()  # circular map
     front = battlefront()
 
-    for ice in my_icebergs:  # type: Iceberg
-        # --------------------
-        free_amount = find_free_amount(ice)  # type: int
-
+    for ice in my_icebergs:  
+   
+        free_amount = find_free_amount(ice)   
         safe_amount = keep_from_dying(ice)
-        free_amount = min(free_amount, safe_amount)  # You cannot use all of can_use. Must be min() of them
+        free_amount = min(free_amount, safe_amount)   
 
         info = {"amount": free_amount, "acted": False}
         ice_data[ice.unique_id] = info
@@ -103,7 +104,7 @@ def pre_turn(game):
     future_neutral_icebergs = []
 
     # future icebergs
-    for i in all_icebergs:  # type: Iceberg
+    for i in all_icebergs:   
         owner, amount, max_dist = IceState(i)
         calc_future_state[i.unique_id] = {"owner": owner, "amount": amount, "inTurn": max_dist}
         if not i.owner.equals(enemy_player) and not i.owner.equals(player):  # Neutral Ice
@@ -116,8 +117,7 @@ def pre_turn(game):
 
 
 def _upgrade():
-    # type: () -> None
-
+    
     global ice_data
 
     for ice in my_icebergs:
@@ -139,15 +139,11 @@ def _protect():
         return
 
     for ice in my_icebergs:
-        if calc_future_state[ice.unique_id][
-            "owner"] != player:   
+        if calc_future_state[ice.unique_id]["owner"] != player:   
             need_protect.append(ice)
 
-    can_help_ices = sorted(my_icebergs, key=lambda x: (Get_turns_till_arrival(x, needIce), x.penguin_amount))
-    need_protect = sorted(need_protect, key=lambda x: estimate_move(x, can_help_ices))
-    #need_protect = sorted(need_protect, key=lambda x: avg_distance_from_others(x, [y for y in my_icebergs if
-    #                                                                               not x.equals(y)]) / x.level)
-
+    need_protect = sorted(need_protect, key=lambda x: avg_distance_from_others(x, [y for y in my_icebergs if
+                                                                                   not x.equals(y)]) / x.level)
     if need_protect:
         for needIce in need_protect:
             amount = calc_future_state[ice.unique_id]["amount"] + 1  # maybe use IceState
@@ -155,6 +151,8 @@ def _protect():
             can_help_ices = sorted(my_icebergs, key=lambda x: (Get_turns_till_arrival(x, needIce), x.penguin_amount))
 
             for ice in can_help_ices:
+                if ice.level < 2:
+                    continue
 
                 if ice.equals(needIce):
                     continue
@@ -177,11 +175,17 @@ def _protect():
 
 def _neutral():
     global ice_data
+    flag = False
 
     for ice in my_icebergs:
 
         #  special case:
         destination = special_dest()
+        if destination:
+            amount = IceState(destination, Get_turns_till_arrival(ice, destination))[1] + 1
+            if amount <= ice_data[ice.unique_id]["amount"]:
+                ice.send_penguins(destination, amount)
+                return
 
         if not destination:
             if ice.level < avg_level(enemy_icebergs) * UPGRADE_FACTOR:
@@ -190,13 +194,15 @@ def _neutral():
 
         if destination and Get_turns_till_arrival(ice, destination) < max_dis(all_icebergs) // 2:
             amount = IceState(destination, Get_turns_till_arrival(ice, destination))[1] + 1
-
             if amount <= ice_data[ice.unique_id]["amount"]:
                 send_penguins(ice, destination, amount, "attck neutral")
 
 
 def _attack():
-    attack_dest = get_best_attack_ices()
+    if bonus_iceberg and bonus_iceberg.owner.equals(enemy_player):
+        attack_dest = [bonus_iceberg]
+    else:
+        attack_dest = get_best_attack_ices()
 
     for dest in attack_dest:
         free_ices = [ice for ice in my_icebergs if ice_data[ice.unique_id]["amount"] > 0 and ice_data[ice.unique_id
@@ -223,7 +229,8 @@ def _bridge():
     for ice in my_icebergs:
         for g in my_penguin_groups:
             if g.source == ice and g.destination in future_enemy_icebergs + neutral_icebergs:
-                if worth_to_build_bridge(ice, g.destination):
+                if worth_to_build_bridge(ice,
+                                         g.destination):  # Dina, I added ur condition to the 'worth_to_build' function
                     create_bridge(ice, g.destination)
 
 
@@ -233,15 +240,21 @@ def _reinforce():
 
     free_ices = [ice for ice in my_icebergs if
                  ice_data[ice.unique_id]["acted"] not in ["Upgrade, Bridge"] and ice_data[ice.unique_id]["amount"] > 0]
+
     front.sort(key=lambda x: calc_future_state[x.unique_id]["amount"])
 
-    send = None
+    _front = list(front)
+    if circular:
+        _front = list(enemy_icebergs) # if the map is circular, use the reinforce penguins to attack
+
     for ice in free_ices:
 
-        if ice in front:
+        if ice in _front:
             continue
 
-        for f_ice in front:
+        _front.sort(key=lambda x: Get_turns_till_arrival(x, ice))
+
+        for f_ice in _front:
 
             _amount = ice_data[ice.unique_id]["amount"]
             if _amount <= avg_amount:
@@ -250,7 +263,25 @@ def _reinforce():
             _amount -= avg_amount
 
             send_penguins(ice, f_ice, _amount, "reinforce")
+
             break
+
+
+def _bonus():
+    global ice_data
+
+    if not bonus_iceberg:
+        return
+
+    if (groups(bonus_iceberg, enemy_penguin_groups) or IceState(bonus_iceberg)[
+        0] == enemy_player):  # or have_more_icebergs():
+        for ice in my_icebergs:
+            get_turns = Get_turns_till_arrival(ice, bonus_iceberg)
+            d_owner, d_amount = IceState(bonus_iceberg, get_turns)[0:2]
+            if d_owner != player and ice_data[ice.unique_id]["amount"] > d_amount and get_turns <= max_dis(
+                    all_icebergs) // 2:
+                send_penguins(ice, bonus_iceberg, d_amount + 1, "bonus")
+                break
 
 
 def create_bridge(ice, dest):
@@ -272,6 +303,10 @@ def send_penguins(iceberg, target, amount, reason=""):
     # type: (Iceberg, Iceberg, int, bool) -> bool
 
     global ice_data
+    if groups(iceberg, enemy_penguin_groups) >= ice_data[iceberg.unique_id]["amount"]:
+        return False
+    if iceberg.level < 2 and neutral_icebergs and have_more_icebergs():
+        return False
 
     if ice_data[iceberg.unique_id]["acted"] not in ["Upgrade", "Bridge"]:
         if ice_data[iceberg.unique_id][
@@ -289,22 +324,6 @@ def send_penguins(iceberg, target, amount, reason=""):
 
     return False
 
-
-def _bonus():
-    global ice_data
-
-    if not bonus_iceberg:
-        return
-
-    if (groups(bonus_iceberg, enemy_penguin_groups) or IceState(bonus_iceberg)[
-        0] == enemy_player):  # or have_more_icebergs():
-        for ice in my_icebergs:
-            get_turns = Get_turns_till_arrival(ice, bonus_iceberg)
-            d_owner, d_amount = IceState(bonus_iceberg, get_turns)[0:2]
-            if d_owner != player and ice_data[ice.unique_id]["amount"] > d_amount and get_turns <= max_dis(
-                    all_icebergs) // 2:
-                send_penguins(ice, bonus_iceberg, d_amount + 1, "bonus")
-                break
 
 
 # ------------help functions------------#
@@ -328,18 +347,16 @@ def get_best_natural_ice(my_ice):
 # --------------bridge-----------------#
 
 def worth_to_build_bridge(source, dest):
-    if source.can_create_bridge(dest):
-        groups = [g for g in my_penguin_groups if g.source == source and g.destination == dest]
-        avg_turns = avg_turns_till_arrival(groups)
+    # if source.can_create_bridge(dest):
+    groups = [g for g in my_penguin_groups if g.source == source and g.destination == dest]
+    avg_turns = avg_turns_till_arrival(groups)
 
-        if dest in neutral_icebergs:
-            # if sum(g.penguin_amount for g in groups) >= g.destination.penguin_amount > average_peng(all_icebergs):
-            #    return True
-            return False
+    if dest in neutral_icebergs:
+        return False
 
-        if dest in future_enemy_icebergs and avg_turns / Game.iceberg_max_bridge_duration >= 0.4 and sum(
-                g.penguin_amount for g in groups) > Game.iceberg_bridge_cost:
-            return True
+    if dest in future_enemy_icebergs and avg_turns / Game.iceberg_max_bridge_duration >= 0.4 and sum(
+            g.penguin_amount for g in groups) > Game.iceberg_bridge_cost:
+        return True
 
     return False
 
@@ -477,19 +494,15 @@ def have_more_icebergs():
     return len(my_icebergs) >= len(enemy_icebergs)
 
 
-def max_dis(ices = all_icebergs, otherIces=None):
+def max_dis(icebergs=all_icebergs):
     """
     this function calculate and return the maximum distance between the icebergs in the game
     """
+    n = len(icebergs)
     m = -1
-    if not otherIces:
-            otherIces = ices
-
-    for ice in ices:
-        for oth_ice in otherIces:
-            if ice.equals(oth_ice):
-                continue
-            m = max(m, Get_turns_till_arrival(ice, oth_ice))
+    for i in range(n):
+        for j in range(i + 1, n):
+            m = max(m, icebergs[i].get_turns_till_arrival(icebergs[j]))
     return m
 
 
@@ -516,7 +529,7 @@ def average_peng(icebergs):
 
 
 def avg_turns_till_arrival(groups):
-    return sum(Turns_till_arrival(g) for g in groups) / len(groups)
+    return sum(Turns_till_arrival(g) for g in groups) / len(groups) if groups else 0
 
 
 def avg_distance_from_others(ice, others):
@@ -560,13 +573,8 @@ def find_free_amount(ice):
     return ice.penguin_amount - min_amount
 
 
-def keep_from_dying(ice):  # NOT_OUR_FUNCTION. HAVE TO CHANGE
-    # type: (Iceberg) -> int
-    """
-    Go over all enemies, and see if any of them can kill you if they all out you.
-    :param ice: The friendly ice requested to check
-    :return: The number of penguins you can use without dying.
-    """
+def keep_from_dying(ice):   
+    
     other_ices = [i for i in my_icebergs if i.unique_id != ice.unique_id]  # type: List[Iceberg]
     other_ices.sort(key=lambda i2: i2.get_turns_till_arrival(ice))
 
@@ -632,6 +640,14 @@ def special_dest():
                 send_penguins(ice, dest, amount)
         return dest
 
+    # Case #3 circular map and enemy heads straight for the bonus
+    if bonus_iceberg and len(enemy_icebergs) == 1 and groups(bonus_iceberg, enemy_penguin_groups):
+        return bonus_iceberg
+
+    # Case 4 circular map - we need to send right away
+    if min_dis(all_icebergs) <= 4 and neutral_icebergs:
+        return min(neutral_icebergs, key=lambda x: Get_turns_till_arrival(my_icebergs[0], x))
+
     return None
 
 
@@ -667,16 +683,48 @@ def battlefront():
     return front
 
 
-def estimate_move(dest, senders):
+def ices_map(d):
+    mapping = {}
 
-    owner_val = {}
-    owner_val[player] = 10
-    owner_val[enemy_player] = -10
-    owner_val[neutral_icebergs] = 0
+    # for games that do not include bonus iceberg
+    allIcebergs = all_icebergs + [bonus_iceberg] if bonus_iceberg else all_icebergs
 
-    val = dest.level *-1 \
-        - sum(ice_data[s.unique_id]["amount"] for s in senders) \
-        + max_dis(dest, senders)\
-        + owner_val[dest.owner] \
-        + avg_distance_from_others(dest, enemy_icebergs) \
-        - avg_distance_from_others(dest, my_icebergs)
+    for ice in allIcebergs:
+        mapping[ice] = []
+        for oth in allIcebergs:
+            if not ice.equals(oth) and ice.get_turns_till_arrival(oth) <= d:
+                mapping[ice].append(oth)
+
+    return mapping
+
+
+def dfs(visited, mapping, ice):
+    ans = set()
+    if ice not in visited:
+        ans.add(ice)
+        visited.add(ice)
+        for neighbour in mapping[ice]:
+            ans = ans.union(dfs(visited, mapping, neighbour))
+    return ans
+
+
+def is_circular():
+    mapping = ices_map(5)
+
+    if DEBUG:
+        print(mapping)
+
+    set_ices = dfs(set(), mapping, my_icebergs[0])
+
+    if (len(set_ices) / len(all_icebergs)) < 0.8:
+        return False
+
+    for neighbors in mapping.values():
+        if len(neighbors) != 2:
+            return False
+    
+    if DEBUG:
+        print("circular")
+    
+    return True
+
