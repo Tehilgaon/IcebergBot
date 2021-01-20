@@ -186,10 +186,12 @@ def _protect():
                     continue
 
                 if Get_turns_till_arrival(ice, needIce) >= MAX_d // 2 and not tricky:
+                    print("^^")
                     continue
 
                 if ice_data[ice.unique_id]["amount"] > ice.penguins_per_turn:
                     ice_amount = ice_data[ice.unique_id]["amount"]
+                    print("$$")
                     if ice_amount >= amount:
                         send_penguins(ice, needIce, amount, "protect")
                         need_protect.remove(needIce)
@@ -278,39 +280,32 @@ def _reinforce():
     
     avg_amount = average_peng(my_icebergs)
     avg_enemy_level = avg_level(enemy_icebergs)
-
+    
     free_ices = [ice for ice in my_icebergs if
                  ice_data[ice.unique_id]["acted"] not in ["Upgrade, Bridge"] and ice_data[ice.unique_id]["amount"] > 0]
-
-
+                 
+    
     if circular:  # if the map is a circle,use the reinforce penguins to attack
         front = list(enemy_icebergs)
     
     if tricky:
         front=list(g.destination for g in enemy_penguin_groups if g.destination in my_icebergs)        
-  
-
-    if front:
-        free_ices.sort(key=lambda x: Get_turns_till_arrival(x, front[0]))
-
         
     for ice in free_ices:
-
+        
         if ice in front:
             continue
 
-        if ice.level < avg_enemy_level * UPGRADE_FACTOR :
+        if ice.level < avg_enemy_level:
             continue
 
         _amount = ice_data[ice.unique_id]["amount"]
-        if _amount <= avg_amount and ice.level < ice.upgrade_level_limit:
+        if _amount <= avg_amount and ice.level < level_limit(ice)*UPGRADE_FACTOR:
             continue
 
         front.sort(key=lambda x: Get_turns_till_arrival(ice, x))
 
         for f_ice in front:
-            if ice_data[f_ice.unique_id]["amount"]>=f_ice.max_penguins:
-                continue
             _amount -= _amount // len(free_ices)
 
             send_penguins(ice, f_ice, _amount, "reinforce")
@@ -778,10 +773,7 @@ def special_dest(ice):
             if ice_data[ice.unique_id]["amount"]>d.penguin_amount:
                 ice.send_penguins(d,d.penguin_amount + Get_turns_till_arrival(ice,d)*d.penguins_per_turn)
                 
-    if default_map and Game.turn>200 and len(my_icebergs)>=len(enemy_icebergs)*2:
-        d=min(enemy_icebergs,key=lambda x: Get_turns_till_arrival(my_icebergs[0],x))
-        for ice in my_icebergs:
-            ice.send_penguins(d,d.penguin_amount//2)
+
     # Case #1: game starts where our ice and the enemy ice in the closest positions
     if len(my_icebergs) == len(enemy_icebergs) == 1:
         ice, enemyIce = my_icebergs[0], enemy_icebergs[0]
